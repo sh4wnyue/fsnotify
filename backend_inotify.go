@@ -138,6 +138,10 @@ type Watcher struct {
 	doneResp    chan struct{}     // Channel to respond to Close
 }
 
+type watch struct {
+	wd    int    // Watch descriptor (as returned by the inotify_add_watch() syscall)
+	flags uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
+}
 type watchPath struct {
 	path    string
 	recurse bool
@@ -309,10 +313,10 @@ func (w *Watcher) add(path string, recurse bool) error {
 	}
 
 	if watchEntry == nil {
-		w.watches[path] = &watch{wd: uint32(wd), flags: flags}
+		w.watches[path] = &watch{wd: wd, flags: flags}
 		w.paths[wd] = watchPath{path: path, recurse: recurse}
 	} else {
-		watchEntry.wd = uint32(wd)
+		watchEntry.wd = wd
 		watchEntry.flags = flags
 	}
 
@@ -339,6 +343,7 @@ func (w *Watcher) Remove(name string) error {
 		return nil
 	}
 
+	name, recurse := recursivePath(name)
 	name = filepath.Clean(name)
 
 	// Fetch the watch.
@@ -350,6 +355,11 @@ func (w *Watcher) Remove(name string) error {
 		return fmt.Errorf("%w: %s", ErrNonExistentWatch, name)
 	}
 
+	p := w.paths[watch.wd]
+	if recurse && !p.recurse {
+		return fmt.Errorf("can't use /... with non-recursive watch %q", name)
+	}
+
 	return w.remove(name, watch)
 }
 
@@ -358,7 +368,7 @@ func (w *Watcher) remove(name string, watch *watch) error {
 	delete(w.paths, int(watch.wd))
 	delete(w.watches, name)
 
-	success, errno := unix.InotifyRmWatch(w.fd, watch.wd)
+	success, errno := unix.InotifyRmWatch(w.fd, uint32(watch.wd))
 	if success == -1 {
 		// TODO: Perhaps it's not helpful to return an error here in every case;
 		//       The only two possible errors are:
@@ -392,11 +402,6 @@ func (w *Watcher) WatchList() []string {
 	}
 
 	return entries
-}
-
-type watch struct {
-	wd    uint32 // Watch descriptor (as returned by the inotify_add_watch() syscall)
-	flags uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
 }
 
 // readEvents reads from the inotify file descriptor, converts the
