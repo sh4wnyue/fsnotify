@@ -65,11 +65,10 @@ const (
 
 // Common errors that can be reported.
 var (
-	ErrNonExistentWatch     = errors.New("fsnotify: can't remove non-existent watcher")
-	ErrEventOverflow        = errors.New("fsnotify: queue or buffer overflow")
-	ErrClosed               = errors.New("fsnotify: watcher already closed")
-	ErrNotDirectory         = errors.New("fsnotify: not a directory")
-	ErrRecursionUnsupported = errors.New("fsnotify: recursion not supported")
+	ErrNonExistentWatch = errors.New("fsnotify: can't remove non-existent watcher")
+	ErrEventOverflow    = errors.New("fsnotify: queue or buffer overflow")
+	ErrClosed           = errors.New("fsnotify: watcher already closed")
+	ErrNotDirectory     = errors.New("fsnotify: not a directory")
 )
 
 func (o Op) String() string {
@@ -167,13 +166,4 @@ func getOptions(opts ...addOpt) withOpts {
 // you're hitting "queue or buffer overflow" errors ([ErrEventOverflow]).
 func WithBufferSize(bytes int) addOpt {
 	return func(opt *withOpts) { opt.bufsize = bytes }
-}
-
-// Check if this path is recursive (ends with "/..." or "\..."), and return the
-// path with the /... stripped.
-func recursivePath(path string) (string, bool) {
-	if filepath.Base(path) == "..." {
-		return filepath.Dir(path), true
-	}
-	return path, false
 }

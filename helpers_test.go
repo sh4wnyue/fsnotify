@@ -589,7 +589,7 @@ func errorContains(out error, want string) bool {
 
 func recurseOnly(t *testing.T) {
 	switch runtime.GOOS {
-	case "windows":
+	case "windows", "linux":
 		// Run test.
 	default:
 		t.Skip("recursion not yet supported on " + runtime.GOOS)
