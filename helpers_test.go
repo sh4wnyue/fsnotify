@@ -586,3 +586,12 @@ func errorContains(out error, want string) bool {
 	}
 	return strings.Contains(out.Error(), want)
 }
+
+func recurseOnly(t *testing.T) {
+	switch runtime.GOOS {
+	case "windows":
+		// Run test.
+	default:
+		t.Skip("recursion not yet supported on " + runtime.GOOS)
+	}
+}
