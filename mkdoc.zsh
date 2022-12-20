@@ -80,6 +80,8 @@ add=$(<<EOF
 //
 // Returns [ErrClosed] if [Watcher.Close] was called.
 //
+// See [AddWith] for a version that allows adding options.
+//
 // # Watching directories
 //
 // All files in a directory are monitored, including new files that are created
@@ -100,6 +102,17 @@ add=$(<<EOF
 EOF
 )
 
+addwith=$(<<EOF
+// AddWith is like [Add], but allows adding options. When using Add() the
+// defaults described below are used.
+//
+// Possible options are:
+//
+//   - [WithBufferSize] sets the buffer size for the Windows backend; no-op on
+//     other platforms. The default is 64K (65536 bytes).
+EOF
+)
+
 remove=$(<<EOF
 // Remove stops monitoring the path for changes.
 //
@@ -107,6 +120,8 @@ remove=$(<<EOF
 // /tmp/dir and /tmp/dir/subdir then you will need to remove both.
 //
 // Removing a path that has not yet been added returns [ErrNonExistentWatch].
+//
+// Returns nil if [Watcher.Close] was called.
 EOF
 )
 
@@ -166,7 +181,7 @@ errors=$(<<EOF
 	// [ErrEventOverflow] is used to indicate there are too many events:
 	//
 	//  - inotify: there are too many queued events (fs.inotify.max_queued_events sysctl)
-	//  - windows: The buffer size is too small.
+	//  - windows: The buffer size is too small; [WithBufferSize] can be used to increase it.
 	//  - kqueue, fen: not used.
 EOF
 )
@@ -202,6 +217,7 @@ set-cmt() {
 set-cmt '^type Watcher struct '             $watcher
 set-cmt '^func NewWatcher('                 $new
 set-cmt '^func (w \*Watcher) Add('          $add
+set-cmt '^func (w \*Watcher) AddWith('      $addwith
 set-cmt '^func (w \*Watcher) Remove('       $remove
 set-cmt '^func (w \*Watcher) Close('        $close
 set-cmt '^func (w \*Watcher) WatchList('    $watchlist

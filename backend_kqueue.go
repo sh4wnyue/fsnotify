@@ -6,7 +6,6 @@ package fsnotify
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -106,7 +105,7 @@ type Watcher struct {
 	// [ErrEventOverflow] is used to indicate there are too many events:
 	//
 	//  - inotify: there are too many queued events (fs.inotify.max_queued_events sysctl)
-	//  - windows: The buffer size is too small.
+	//  - windows: The buffer size is too small; [WithBufferSize] can be used to increase it.
 	//  - kqueue, fen: not used.
 	Errors chan error
 
@@ -194,8 +193,8 @@ func (w *Watcher) sendEvent(e Event) bool {
 	case w.Events <- e:
 		return true
 	case <-w.done:
+		return false
 	}
-	return false
 }
 
 // Returns true if the error was sent, or false if watcher is closed.
@@ -204,8 +203,8 @@ func (w *Watcher) sendError(err error) bool {
 	case w.Errors <- err:
 		return true
 	case <-w.done:
+		return false
 	}
-	return false
 }
 
 // Close removes all watches and closes the events channel.
@@ -249,6 +248,8 @@ func (w *Watcher) Close() error {
 //
 // Returns [ErrClosed] if [Watcher.Close] was called.
 //
+// See [AddWith] for a version that allows adding options.
+//
 // # Watching directories
 //
 // All files in a directory are monitored, including new files that are created
@@ -266,11 +267,17 @@ func (w *Watcher) Close() error {
 //
 // Instead, watch the parent directory and use Event.Name to filter out files
 // you're not interested in. There is an example of this in [cmd/fsnotify/file.go].
-func (w *Watcher) Add(name string) error {
-	_, recurse := recursivePath(name)
-	if recurse {
-		return ErrRecursionUnsupported
-	}
+func (w *Watcher) Add(name string) error { return w.AddWith(name) }
+
+// AddWith is like [Add], but allows adding options. When using Add() the
+// defaults described below are used.
+//
+// Possible options are:
+//
+//   - [WithBufferSize] sets the buffer size for the Windows backend; no-op on
+//     other platforms. The default is 64K (65536 bytes).
+func (w *Watcher) AddWith(name string, opts ...addOpt) error {
+	_ = getOptions(opts...)
 
 	w.mu.Lock()
 	w.userWatches[name] = struct{}{}
@@ -285,6 +292,8 @@ func (w *Watcher) Add(name string) error {
 // /tmp/dir and /tmp/dir/subdir then you will need to remove both.
 //
 // Removing a path that has not yet been added returns [ErrNonExistentWatch].
+//
+// Returns nil if [Watcher.Close] was called.
 func (w *Watcher) Remove(name string) error {
 	return w.remove(name, true)
 }
@@ -536,7 +545,7 @@ func (w *Watcher) readEvents() {
 			}
 
 			if path.isDir && event.Has(Write) && !event.Has(Remove) {
-				w.sendDirectoryChangeEvents(event.Name, false)
+				w.sendDirectoryChangeEvents(event.Name)
 			} else {
 				if !w.sendEvent(event) {
 					closed = true
@@ -545,20 +554,30 @@ func (w *Watcher) readEvents() {
 			}
 
 			if event.Has(Remove) {
-				// Look for a file that may have overwritten this.
-				// For example, mv f1 f2 will delete f2, then create f2.
+				// Look for a file that may have overwritten this; for example,
+				// mv f1 f2 will delete f2, then create f2.
 				if path.isDir {
 					fileDir := filepath.Clean(event.Name)
 					w.mu.Lock()
 					_, found := w.watches[fileDir]
 					w.mu.Unlock()
 					if found {
-						w.sendDirectoryChangeEvents(fileDir, true)
+						err := w.sendDirectoryChangeEvents(fileDir)
+						if err != nil {
+							if !w.sendError(err) {
+								closed = true
+							}
+						}
 					}
 				} else {
 					filePath := filepath.Clean(event.Name)
-					if fileInfo, err := os.Lstat(filePath); err == nil {
-						w.sendFileCreatedEventIfNew(filePath, fileInfo)
+					if fi, err := os.Lstat(filePath); err == nil {
+						err := w.sendFileCreatedEventIfNew(filePath, fi)
+						if err != nil {
+							if !w.sendError(err) {
+								closed = true
+							}
+						}
 					}
 				}
 			}
@@ -592,15 +611,20 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 // watchDirectoryFiles to mimic inotify when adding a watch on a directory
 func (w *Watcher) watchDirectoryFiles(dirPath string) error {
 	// Get all files
-	files, err := ioutil.ReadDir(dirPath)
+	files, err := os.ReadDir(dirPath)
 	if err != nil {
 		return err
 	}
 
-	for _, fileInfo := range files {
-		path := filepath.Join(dirPath, fileInfo.Name())
+	for _, f := range files {
+		path := filepath.Join(dirPath, f.Name())
 
-		cleanPath, err := w.internalWatch(path, fileInfo)
+		fi, err := f.Info()
+		if err != nil {
+			return fmt.Errorf("%q: %w", filepath.Join(dirPath, fi.Name()), err)
+		}
+
+		cleanPath, err := w.internalWatch(path, fi)
 		if err != nil {
 			// No permission to read the file; that's not a problem: just skip.
 			// But do add it to w.fileExists to prevent it from being picked up
@@ -610,7 +634,7 @@ func (w *Watcher) watchDirectoryFiles(dirPath string) error {
 			case errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM):
 				cleanPath = filepath.Clean(path)
 			default:
-				return fmt.Errorf("%q: %w", filepath.Join(dirPath, fileInfo.Name()), err)
+				return fmt.Errorf("%q: %w", filepath.Join(dirPath, fi.Name()), err)
 			}
 		}
 
@@ -626,28 +650,37 @@ func (w *Watcher) watchDirectoryFiles(dirPath string) error {
 //
 // This functionality is to have the BSD watcher match the inotify, which sends
 // a create event for files created in a watched directory.
-func (w *Watcher) sendDirectoryChangeEvents(dir string, ignoreNotExists bool) {
-	files, err := ioutil.ReadDir(dir)
+func (w *Watcher) sendDirectoryChangeEvents(dir string) error {
+	files, err := os.ReadDir(dir)
 	if err != nil {
-		// Directory could have been deleted already; just ignore that.
-		if ignoreNotExists && errors.Is(err, os.ErrNotExist) {
-			return
+		// Directory no longer exists: we can ignore this safely. kqueue will
+		// still give us the correct events.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		if !w.sendError(fmt.Errorf("fsnotify.sendDirectoryChangeEvents: %w", err)) {
-			return
-		}
+		return fmt.Errorf("fsnotify.sendDirectoryChangeEvents: %w", err)
 	}
 
-	for _, fi := range files {
-		err := w.sendFileCreatedEventIfNew(filepath.Join(dir, fi.Name()), fi)
+	for _, f := range files {
+		fi, err := f.Info()
 		if err != nil {
-			return
+			return fmt.Errorf("fsnotify.sendDirectoryChangeEvents: %w", err)
+		}
+
+		err = w.sendFileCreatedEventIfNew(filepath.Join(dir, fi.Name()), fi)
+		if err != nil {
+			// Don't need to send an error if this file isn't readable.
+			if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+				return nil
+			}
+			return fmt.Errorf("fsnotify.sendDirectoryChangeEvents: %w", err)
 		}
 	}
+	return nil
 }
 
 // sendFileCreatedEvent sends a create event if the file isn't already being tracked.
-func (w *Watcher) sendFileCreatedEventIfNew(filePath string, fileInfo os.FileInfo) (err error) {
+func (w *Watcher) sendFileCreatedEventIfNew(filePath string, fi os.FileInfo) (err error) {
 	w.mu.Lock()
 	_, doesExist := w.fileExists[filePath]
 	w.mu.Unlock()
@@ -658,7 +691,7 @@ func (w *Watcher) sendFileCreatedEventIfNew(filePath string, fileInfo os.FileInf
 	}
 
 	// like watchDirectoryFiles (but without doing another ReadDir)
-	filePath, err = w.internalWatch(filePath, fileInfo)
+	filePath, err = w.internalWatch(filePath, fi)
 	if err != nil {
 		return err
 	}
@@ -670,8 +703,8 @@ func (w *Watcher) sendFileCreatedEventIfNew(filePath string, fileInfo os.FileInf
 	return nil
 }
 
-func (w *Watcher) internalWatch(name string, fileInfo os.FileInfo) (string, error) {
-	if fileInfo.IsDir() {
+func (w *Watcher) internalWatch(name string, fi os.FileInfo) (string, error) {
+	if fi.IsDir() {
 		// mimic Linux providing delete events for subdirectories, but preserve
 		// the flags used if currently watching subdirectory
 		w.mu.Lock()
