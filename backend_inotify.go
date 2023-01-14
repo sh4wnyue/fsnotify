@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,10 +145,11 @@ type (
 		path map[string]uint32 // pathname → wd
 	}
 	watch struct {
-		wd      uint32 // Watch descriptor (as returned by the inotify_add_watch() syscall)
-		flags   uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
-		path    string // Watch path.
-		recurse bool
+		wd       uint32 // Watch descriptor (as returned by the inotify_add_watch() syscall)
+		flags    uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
+		path     string // Watch path.
+		recurse  bool
+		recurse2 []watches
 	}
 )
 
@@ -178,25 +180,39 @@ func (w *watches) remove(wd uint32) {
 	delete(w.wd, wd)
 }
 
-func (w *watches) removePath(path string) (uint32, error) {
+func (w *watches) removePath(path string) ([]uint32, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	path, recurse := recursivePath(path)
 	wd, ok := w.path[path]
 	if !ok {
-		return 0, fmt.Errorf("%w: %s", ErrNonExistentWatch, path)
+		return nil, fmt.Errorf("%w: %s", ErrNonExistentWatch, path)
 	}
 
 	watch := w.wd[wd]
 	if recurse && !watch.recurse {
-		return 0, fmt.Errorf("can't use /... with non-recursive watch %q", path)
+		return nil, fmt.Errorf("can't use /... with non-recursive watch %q", path)
 	}
 
 	delete(w.path, path)
 	delete(w.wd, wd)
 
-	return wd, nil
+	if !watch.recurse {
+		return []uint32{wd}, nil
+	}
+
+	wds := make([]uint32, 0, 8)
+	wds = append(wds, wd)
+	for p, rwd := range w.path {
+		if filepath.HasPrefix(p, path) {
+			delete(w.path, p)
+			delete(w.wd, rwd)
+			wds = append(wds, rwd)
+		}
+	}
+
+	return wds, nil
 }
 
 func (w *watches) byPath(path string) *watch {
@@ -356,33 +372,34 @@ func (w *Watcher) Add(name string) error { return w.AddWith(name) }
 //
 //   - [WithBufferSize] sets the buffer size for the Windows backend; no-op on
 //     other platforms. The default is 64K (65536 bytes).
-func (w *Watcher) AddWith(name string, opts ...addOpt) error {
+func (w *Watcher) AddWith(path string, opts ...addOpt) error {
 	if w.isClosed() {
 		return ErrClosed
 	}
 
 	_ = getOptions(opts...)
 
-	name, recurse := recursivePath(name)
+	path, recurse := recursivePath(path)
 	if recurse {
-		dirs, err := findDirs(name)
-		if err != nil {
-			return err
-		}
-		for _, d := range dirs {
-			err := w.add(d, true)
+		return filepath.WalkDir(path, func(root string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-		}
-		return nil
+			if !d.IsDir() {
+				if root == path {
+					return fmt.Errorf("%q: %w", path, ErrNotDirectory)
+				}
+				return nil
+			}
+
+			return w.add(root, true)
+		})
 	}
 
-	return w.add(name, false)
+	return w.add(path, false)
 }
 
 func (w *Watcher) add(path string, recurse bool) error {
-	path = filepath.Clean(path)
 	var flags uint32 = unix.IN_MOVED_TO | unix.IN_MOVED_FROM |
 		unix.IN_CREATE | unix.IN_ATTRIB | unix.IN_MODIFY |
 		unix.IN_MOVE_SELF | unix.IN_DELETE | unix.IN_DELETE_SELF
@@ -431,28 +448,30 @@ func (w *Watcher) Remove(name string) error {
 	if w.isClosed() {
 		return nil
 	}
-	return w.remove(filepath.Clean(name))
+	return w.remove(name)
 }
 
-func (w *Watcher) remove(name string) error {
-	wd, err := w.watches.removePath(name)
+func (w *Watcher) remove(path string) error {
+	wds, err := w.watches.removePath(path)
 	if err != nil {
 		return err
 	}
 
-	success, errno := unix.InotifyRmWatch(w.fd, uint32(wd))
-	if success == -1 {
-		// TODO: Perhaps it's not helpful to return an error here in every case;
-		//       The only two possible errors are:
-		//
-		//       - EBADF, which happens when w.fd is not a valid file descriptor
-		//         of any kind.
-		//       - EINVAL, which is when fd is not an inotify descriptor or wd
-		//         is not a valid watch descriptor. Watch descriptors are
-		//         invalidated when they are removed explicitly or implicitly;
-		//         explicitly by inotify_rm_watch, implicitly when the file they
-		//         are watching is deleted.
-		return errno
+	for _, wd := range wds {
+		success, errno := unix.InotifyRmWatch(w.fd, uint32(wd))
+		if success == -1 {
+			// TODO: Perhaps it's not helpful to return an error here in every case;
+			//       The only two possible errors are:
+			//
+			//       - EBADF, which happens when w.fd is not a valid file descriptor
+			//         of any kind.
+			//       - EINVAL, which is when fd is not an inotify descriptor or wd
+			//         is not a valid watch descriptor. Watch descriptors are
+			//         invalidated when they are removed explicitly or implicitly;
+			//         explicitly by inotify_rm_watch, implicitly when the file they
+			//         are watching is deleted.
+			return errno
+		}
 	}
 
 	return nil

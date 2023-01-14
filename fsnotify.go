@@ -12,7 +12,6 @@ package fsnotify
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"path/filepath"
 	"strings"
 )
@@ -105,37 +104,13 @@ func (e Event) String() string {
 	return fmt.Sprintf("%-13s %q", e.Op.String(), e.Name)
 }
 
-// findDirs finds all directories under path (return value *includes* path as
-// the first entry).
-//
-// A symlink for a directory is not considered a directory.
-func findDirs(path string) ([]string, error) {
-	dirs := make([]string, 0, 8)
-	err := filepath.WalkDir(path, func(root string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if root == path && !d.IsDir() {
-			return fmt.Errorf("%q: %w", path, ErrNotDirectory)
-		}
-		if d.IsDir() {
-			dirs = append(dirs, root)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return dirs, nil
-}
-
 // Check if this path is recursive (ends with "/..."), and return the path with
 // the /... stripped.
 func recursivePath(path string) (string, bool) {
 	if filepath.Base(path) == "..." {
 		return filepath.Dir(path), true
 	}
-	return path, false
+	return filepath.Clean(path), false
 }
 
 type (
