@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1522,4 +1523,55 @@ func TestFindDirs(t *testing.T) {
 			t.Errorf("dirs contains entries: %s", dirs)
 		}
 	})
+}
+
+func BenchmarkWatch(b *testing.B) {
+	w, err := NewWatcher()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	tmp := b.TempDir()
+	file := join(tmp, "file")
+	err = w.Add(tmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for {
+			select {
+			case err, ok := <-w.Errors:
+				if !ok {
+					wg.Done()
+					return
+				}
+				b.Error(err)
+			case _, ok := <-w.Events:
+				if !ok {
+					wg.Done()
+					return
+				}
+			}
+		}
+	}()
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		fp, err := os.Create(file)
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = fp.Close()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	err = w.Close()
+	if err != nil {
+		b.Fatal(err)
+	}
+	wg.Wait()
 }

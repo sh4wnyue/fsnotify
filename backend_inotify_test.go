@@ -93,7 +93,7 @@ func TestInotifyDeleteOpenFile(t *testing.T) {
 	w.collect(t)
 
 	rm(t, file)
-	eventSeparator()
+	waitForEvents()
 	e := w.events(t)
 	cmpEvents(t, tmp, e, newEvents(t, `chmod /file`))
 
@@ -117,11 +117,8 @@ func TestRemoveState(t *testing.T) {
 
 	check := func(want int) {
 		t.Helper()
-		if len(w.watches) != want {
+		if w.watches.len() != want {
 			t.Error(w.watches)
-		}
-		if len(w.paths) != want {
-			t.Error(w.paths)
 		}
 	}
 

@@ -130,28 +130,117 @@ type Watcher struct {
 	// Store fd here as os.File.Read() will no longer return on close after
 	// calling Fd(). See: https://github.com/golang/go/issues/26439
 	fd          int
-	mu          sync.Mutex // Map access
 	inotifyFile *os.File
-	watches     map[string]*watch // Map of inotify watches (path → watch)
-	paths       map[int]watchPath // Map of watched paths (watch descriptor → watchPath)
-	done        chan struct{}     // Channel for sending a "quit message" to the reader goroutine
-	doneResp    chan struct{}     // Channel to respond to Close
+	watches     *watches
+	done        chan struct{} // Channel for sending a "quit message" to the reader goroutine
+	closeMu     sync.Mutex
+	doneResp    chan struct{} // Channel to respond to Close
 }
 
-type watch struct {
-	wd    int    // Watch descriptor (as returned by the inotify_add_watch() syscall)
-	flags uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
+type (
+	watches struct {
+		mu   sync.RWMutex
+		wd   map[uint32]*watch // wd → watch
+		path map[string]uint32 // pathname → wd
+	}
+	watch struct {
+		wd      uint32 // Watch descriptor (as returned by the inotify_add_watch() syscall)
+		flags   uint32 // inotify flags of this watch (see inotify(7) for the list of valid flags)
+		path    string // Watch path.
+		recurse bool
+	}
+)
+
+func newWatches() *watches {
+	return &watches{
+		wd:   make(map[uint32]*watch),
+		path: make(map[string]uint32),
+	}
 }
-type watchPath struct {
-	path    string
-	recurse bool
+
+func (w *watches) len() int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return len(w.wd)
+}
+
+func (w *watches) add(ww *watch) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.wd[ww.wd] = ww
+	w.path[ww.path] = ww.wd
+}
+
+func (w *watches) remove(wd uint32) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.path, w.wd[wd].path)
+	delete(w.wd, wd)
+}
+
+func (w *watches) removePath(path string) (uint32, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	path, recurse := recursivePath(path)
+	wd, ok := w.path[path]
+	if !ok {
+		return 0, fmt.Errorf("%w: %s", ErrNonExistentWatch, path)
+	}
+
+	watch := w.wd[wd]
+	if recurse && !watch.recurse {
+		return 0, fmt.Errorf("can't use /... with non-recursive watch %q", path)
+	}
+
+	delete(w.path, path)
+	delete(w.wd, wd)
+
+	return wd, nil
+}
+
+func (w *watches) byPath(path string) *watch {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.wd[w.path[path]]
+}
+
+func (w *watches) byWd(wd uint32) *watch {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.wd[wd]
+}
+
+func (w *watches) updatePath(path string, f func(*watch) (*watch, error)) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var existing *watch
+	wd, ok := w.path[path]
+	if ok {
+		existing = w.wd[wd]
+	}
+
+	upd, err := f(existing)
+	if err != nil {
+		return err
+	}
+	if upd != nil {
+		w.wd[upd.wd] = upd
+		w.path[upd.path] = upd.wd
+
+		if upd.wd != wd {
+			delete(w.wd, wd)
+		}
+	}
+
+	return nil
 }
 
 // NewWatcher creates a new Watcher.
 func NewWatcher() (*Watcher, error) {
-	// Create inotify fd
-	// Need to set the FD to nonblocking mode in order for SetDeadline methods to work
-	// Otherwise, blocking i/o operations won't terminate on close
+	// Need to set nonblocking mode for SetDeadline to work, otherwise blocking
+	// I/O operations won't terminate on close.
 	fd, errno := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if fd == -1 {
 		return nil, errno
@@ -160,8 +249,7 @@ func NewWatcher() (*Watcher, error) {
 	w := &Watcher{
 		fd:          fd,
 		inotifyFile: os.NewFile(uintptr(fd), ""),
-		watches:     make(map[string]*watch),
-		paths:       make(map[int]watchPath),
+		watches:     newWatches(),
 		Events:      make(chan Event),
 		Errors:      make(chan error),
 		done:        make(chan struct{}),
@@ -178,8 +266,8 @@ func (w *Watcher) sendEvent(e Event) bool {
 	case w.Events <- e:
 		return true
 	case <-w.done:
+		return false
 	}
-	return false
 }
 
 // Returns true if the error was sent, or false if watcher is closed.
@@ -203,15 +291,13 @@ func (w *Watcher) isClosed() bool {
 
 // Close removes all watches and closes the events channel.
 func (w *Watcher) Close() error {
-	w.mu.Lock()
+	w.closeMu.Lock()
 	if w.isClosed() {
-		w.mu.Unlock()
+		w.closeMu.Unlock()
 		return nil
 	}
-
-	// Send 'close' signal to goroutine, and set the Watcher to closed.
 	close(w.done)
-	w.mu.Unlock()
+	w.closeMu.Unlock()
 
 	// Causes any blocking reads to return with an error, provided the file
 	// still supports deadline operations.
@@ -301,26 +387,29 @@ func (w *Watcher) add(path string, recurse bool) error {
 		unix.IN_CREATE | unix.IN_ATTRIB | unix.IN_MODIFY |
 		unix.IN_MOVE_SELF | unix.IN_DELETE | unix.IN_DELETE_SELF
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	watchEntry := w.watches[path]
-	if watchEntry != nil {
-		flags |= watchEntry.flags | unix.IN_MASK_ADD
-	}
-	wd, errno := unix.InotifyAddWatch(w.fd, path, flags)
-	if wd == -1 {
-		return errno
-	}
+	return w.watches.updatePath(path, func(existing *watch) (*watch, error) {
+		if existing != nil {
+			flags |= existing.flags | unix.IN_MASK_ADD
+		}
 
-	if watchEntry == nil {
-		w.watches[path] = &watch{wd: wd, flags: flags}
-		w.paths[wd] = watchPath{path: path, recurse: recurse}
-	} else {
-		watchEntry.wd = wd
-		watchEntry.flags = flags
-	}
+		wd, err := unix.InotifyAddWatch(w.fd, path, flags)
+		if wd == -1 {
+			return nil, err
+		}
 
-	return nil
+		if existing == nil {
+			return &watch{
+				wd:      uint32(wd),
+				path:    path,
+				flags:   flags,
+				recurse: recurse,
+			}, nil
+		}
+
+		existing.wd = uint32(wd)
+		existing.flags = flags
+		return existing, nil
+	})
 }
 
 // Remove stops monitoring the path for changes.
@@ -342,33 +431,16 @@ func (w *Watcher) Remove(name string) error {
 	if w.isClosed() {
 		return nil
 	}
-
-	name, recurse := recursivePath(name)
-	name = filepath.Clean(name)
-
-	// Fetch the watch.
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	watch, ok := w.watches[name]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrNonExistentWatch, name)
-	}
-
-	p := w.paths[watch.wd]
-	if recurse && !p.recurse {
-		return fmt.Errorf("can't use /... with non-recursive watch %q", name)
-	}
-
-	return w.remove(name, watch)
+	return w.remove(filepath.Clean(name))
 }
 
-// Unlocked!
-func (w *Watcher) remove(name string, watch *watch) error {
-	delete(w.paths, int(watch.wd))
-	delete(w.watches, name)
+func (w *Watcher) remove(name string) error {
+	wd, err := w.watches.removePath(name)
+	if err != nil {
+		return err
+	}
 
-	success, errno := unix.InotifyRmWatch(w.fd, uint32(watch.wd))
+	success, errno := unix.InotifyRmWatch(w.fd, uint32(wd))
 	if success == -1 {
 		// TODO: Perhaps it's not helpful to return an error here in every case;
 		//       The only two possible errors are:
@@ -382,6 +454,7 @@ func (w *Watcher) remove(name string, watch *watch) error {
 		//         are watching is deleted.
 		return errno
 	}
+
 	return nil
 }
 
@@ -393,13 +466,12 @@ func (w *Watcher) WatchList() []string {
 		return nil
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	entries := make([]string, 0, len(w.watches))
-	for pathname := range w.watches {
+	entries := make([]string, 0, w.watches.len())
+	w.watches.mu.RLock()
+	for pathname := range w.watches.path {
 		entries = append(entries, pathname)
 	}
+	w.watches.mu.RUnlock()
 
 	return entries
 }
@@ -437,14 +509,11 @@ func (w *Watcher) readEvents() {
 		if n < unix.SizeofInotifyEvent {
 			var err error
 			if n == 0 {
-				// If EOF is received. This should really never happen.
-				err = io.EOF
+				err = io.EOF // If EOF is received. This should really never happen.
 			} else if n < 0 {
-				// If an error occurred while reading.
-				err = errno
+				err = errno // If an error occurred while reading.
 			} else {
-				// Read was too short.
-				err = errors.New("notify: short read in readEvents()")
+				err = errors.New("notify: short read in readEvents()") // Read was too short.
 			}
 			if !w.sendError(err) {
 				return
@@ -473,28 +542,29 @@ func (w *Watcher) readEvents() {
 			// doesn't append the filename to the event, but we would like to always fill the
 			// the "Name" field with a valid filename. We retrieve the path of the watch from
 			// the "paths" map.
-			w.mu.Lock()
-			watchPath, ok := w.paths[int(raw.Wd)]
-			name := watchPath.path
+			watch := w.watches.byWd(uint32(raw.Wd))
+
 			// inotify will automatically remove the watch on deletes; just need
 			// to clean our state here.
-			if ok && mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF {
-				delete(w.paths, int(raw.Wd))
-				delete(w.watches, name)
+			if watch != nil && mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF {
+				w.watches.remove(watch.wd)
 			}
 			// We can't really update the state when a watched path is moved;
 			// only IN_MOVE_SELF is sent and not IN_MOVED_{FROM,TO}. So remove
 			// the watch.
-			if ok && mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
-				err := w.remove(name, w.watches[name])
-				if err != nil {
+			if watch != nil && mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
+				err := w.remove(watch.path)
+				if err != nil && !errors.Is(err, ErrNonExistentWatch) {
 					if !w.sendError(err) {
 						return
 					}
 				}
 			}
-			w.mu.Unlock()
 
+			var name string
+			if watch != nil {
+				name = watch.path
+			}
 			if nameLen > 0 {
 				// Point "bytes" at the first byte of the filename
 				bytes := (*[unix.PathMax]byte)(unsafe.Pointer(&buf[offset+unix.SizeofInotifyEvent]))[:nameLen:nameLen]
@@ -520,23 +590,12 @@ func (w *Watcher) readEvents() {
 // Check if path was added as a recursive watch ("dir/...").
 //
 // Returns the watch for the path, or nil.
-func (w *Watcher) isRecursive(path string) *watch {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	ww, ok := w.watches[path]
-	if !ok {
-		// path could be a file, so also check the Dir.
-		path = filepath.Dir(path)
-		ww, ok = w.watches[path]
-		if !ok {
-			return nil
-		}
+func (w *Watcher) isRecursive(path string) bool {
+	ww := w.watches.byPath(path)
+	if ww == nil { // path could be a file, so also check the Dir.
+		ww = w.watches.byPath(filepath.Dir(path))
 	}
-	if !w.paths[int(ww.wd)].recurse {
-		return nil
-	}
-	return ww
+	return ww != nil && ww.recurse
 }
 
 // newEvent returns an platform-independent Event based on an inotify mask.
@@ -547,8 +606,8 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 
 		// Add new directories on recursive watches.
 		if mask&unix.IN_ISDIR == unix.IN_ISDIR {
-			ww := w.isRecursive(name)
-			if ww != nil {
+			recurse := w.isRecursive(name)
+			if recurse {
 				//err := w.add(name, true)
 				err := w.Add(filepath.Join(name, "..."))
 				if err != nil {
@@ -572,8 +631,8 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 
 		//if mask&unix.IN_ISDIR == unix.IN_ISDIR {
 		// TODO: should probably remove some things as well.
-		// ww := w.isRecursive(name)
-		// if ww != nil {
+		// recurse := w.isRecursive(name)
+		// if recurse {
 		// 	err := w.Add(filepath.Join(name, "..."))
 		// 	if err != nil {
 		// 		// TODO: not sure if this has a nice error message.
