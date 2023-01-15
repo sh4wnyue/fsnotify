@@ -843,8 +843,9 @@ func TestWatchRecursive(t *testing.T) {
 			touch(t, tmp, "/one/two/new/file")
 			touch(t, tmp, "/one/two/new/dir/file")
 		}, `
-			# TODO: some missing events
 			create        /one/two/new            # mkdir -p one/two/new/dir
+			create        /one/two/new/dir
+
 			create        /one/two/new/file       # touch one/two/new/file
 			create        /one/two/new/dir/file   # touch one/two/new/dir/file
 
@@ -906,7 +907,7 @@ func TestWatchRecursive(t *testing.T) {
 			rename               "/one"                        # mv one one-rename
 			create               "/one-rename"
 
-			rename               "/one-rename"                 # mv one one-rename
+			#rename               "/one-rename"                 # mv one one-rename
 
 			# TODO: events missing
 

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/fsnotify/fsnotify/internal"
 	"golang.org/x/sys/unix"
 )
 
@@ -377,7 +378,7 @@ func (w *Watcher) AddWith(path string, opts ...addOpt) error {
 		return ErrClosed
 	}
 
-	_ = getOptions(opts...)
+	with := getOptions(opts...)
 
 	path, recurse := recursivePath(path)
 	if recurse {
@@ -390,6 +391,16 @@ func (w *Watcher) AddWith(path string, opts ...addOpt) error {
 					return fmt.Errorf("%q: %w", path, ErrNotDirectory)
 				}
 				return nil
+			}
+
+			// Send a Create event when adding new directory from a recursive
+			// watch; this is for "mkdir -p one/two/three". Usually all those
+			// directories will be created before we can set up watchers on the
+			// subdirectories, so only "one" would be sent as a Create event and
+			// not "one/two" and "one/two/three" (inotifywait -r has the same
+			// problem).
+			if with.sendCreate && root != path {
+				w.sendEvent(Event{Name: root, Op: Create})
 			}
 
 			return w.add(root, true)
@@ -594,7 +605,7 @@ func (w *Watcher) readEvents() {
 			event := w.newEvent(name, mask)
 
 			// Send the events that are not ignored on the events channel
-			if mask&unix.IN_IGNORED == 0 {
+			if mask&unix.IN_IGNORED == 0 && event.Op != 0 {
 				if !w.sendEvent(event) {
 					return
 				}
@@ -617,18 +628,23 @@ func (w *Watcher) isRecursive(path string) bool {
 	return ww != nil && ww.recurse
 }
 
+// IN_MOVED_FROM → /tmp/TestWatchRecursiverename_directory2313379138/001/one
+// IN_MOVED_TO   → /tmp/TestWatchRecursiverename_directory2313379138/001/one-rename
+// IN_MOVE_SELF  → /tmp/TestWatchRecursiverename_directory2313379138/001/one
+
 // newEvent returns an platform-independent Event based on an inotify mask.
 func (w *Watcher) newEvent(name string, mask uint32) Event {
+	internal.Debug(name, mask)
+
 	e := Event{Name: name}
-	if mask&unix.IN_CREATE == unix.IN_CREATE || mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+	if mask&unix.IN_CREATE == unix.IN_CREATE {
 		e.Op |= Create
 
 		// Add new directories on recursive watches.
 		if mask&unix.IN_ISDIR == unix.IN_ISDIR {
 			recurse := w.isRecursive(name)
 			if recurse {
-				//err := w.add(name, true)
-				err := w.Add(filepath.Join(name, "..."))
+				err := w.AddWith(filepath.Join(name, "..."), withCreate())
 				if err != nil {
 					// TODO: not sure if this has a nice error message.
 					//       Also, this path could have been removed by now;
@@ -638,6 +654,9 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 			}
 		}
 	}
+	if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+		e.Op |= Create
+	}
 	if mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF || mask&unix.IN_DELETE == unix.IN_DELETE {
 		// TODO: remove recursive watches.
 		e.Op |= Remove
@@ -645,7 +664,17 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 	if mask&unix.IN_MODIFY == unix.IN_MODIFY {
 		e.Op |= Write
 	}
-	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF || mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+		e.Op |= Rename
+	}
+	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
+		// Ignore when moving "self" for recursive watches, but add new watch.
+		// TODO: we should really use the "cookie" from inotify to properly deal
+		// with renames.
+		if w.isRecursive(name) {
+			return Event{}
+		}
+
 		e.Op |= Rename
 
 		//if mask&unix.IN_ISDIR == unix.IN_ISDIR {

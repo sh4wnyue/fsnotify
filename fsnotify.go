@@ -116,7 +116,8 @@ func recursivePath(path string) (string, bool) {
 type (
 	addOpt   func(opt *withOpts)
 	withOpts struct {
-		bufsize int
+		bufsize    int
+		sendCreate bool
 	}
 )
 
@@ -141,4 +142,8 @@ func getOptions(opts ...addOpt) withOpts {
 // you're hitting "queue or buffer overflow" errors ([ErrEventOverflow]).
 func WithBufferSize(bytes int) addOpt {
 	return func(opt *withOpts) { opt.bufsize = bytes }
+}
+
+func withCreate() addOpt {
+	return func(opt *withOpts) { opt.sendCreate = true }
 }
