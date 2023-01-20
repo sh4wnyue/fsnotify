@@ -909,7 +909,8 @@ func TestWatchRecursive(t *testing.T) {
 
 			#rename               "/one-rename"                 # mv one one-rename
 
-			# TODO: events missing
+			# TODO: events missing. This is because we remove the watch on renames.
+			# Should kind of fix the way renames work...
 
 			windows:
 				rename               "/one"                        # mv one one-rename
@@ -1285,6 +1286,26 @@ func TestAdd(t *testing.T) {
 		if !errors.Is(err, internal.SyscallEACCES) {
 			t.Errorf("not syscall.EACCESS: %T %#[1]v", err)
 		}
+	})
+
+	t.Run("add same path twice", func(t *testing.T) {
+		tmp := t.TempDir()
+		w := newCollector(t)
+		if err := w.w.Add(tmp); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.w.Add(tmp); err != nil {
+			t.Fatal(err)
+		}
+
+		w.collect(t)
+		touch(t, tmp, "file")
+		rm(t, tmp, "file")
+
+		cmpEvents(t, tmp, w.events(t), newEvents(t, `
+			create /file
+			remove /file
+		`))
 	})
 }
 
