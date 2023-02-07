@@ -60,6 +60,9 @@ const (
 	// get triggered very frequently by some software. For example, Spotlight
 	// indexing on macOS, anti-virus software, backup software, etc.
 	Chmod
+	MoveIn
+	MoveOut
+	CloseWrite
 )
 
 // Common errors that can be reported.
@@ -85,6 +88,15 @@ func (o Op) String() string {
 	}
 	if o.Has(Chmod) {
 		b.WriteString("|CHMOD")
+	}
+	if o.Has(MoveIn) {
+		b.WriteString("|MOVEIN")
+	}
+	if o.Has(MoveOut) {
+		b.WriteString("|MOVEOUT")
+	}
+	if o.Has(CloseWrite) {
+		b.WriteString("|CLOSEWRITE")
 	}
 	if b.Len() == 0 {
 		return "[no events]"

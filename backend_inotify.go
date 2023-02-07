@@ -562,8 +562,11 @@ func (w *Watcher) readEvents() {
 // newEvent returns an platform-independent Event based on an inotify mask.
 func (w *Watcher) newEvent(name string, mask uint32) Event {
 	e := Event{Name: name}
-	if mask&unix.IN_CREATE == unix.IN_CREATE || mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+	if mask&unix.IN_CREATE == unix.IN_CREATE {
 		e.Op |= Create
+	}
+	if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+		e.Op |= MoveIn
 	}
 	if mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF || mask&unix.IN_DELETE == unix.IN_DELETE {
 		e.Op |= Remove
@@ -571,11 +574,17 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 	if mask&unix.IN_MODIFY == unix.IN_MODIFY {
 		e.Op |= Write
 	}
-	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF || mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
 		e.Op |= Rename
+	}
+	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+		e.Op |= MoveOut
 	}
 	if mask&unix.IN_ATTRIB == unix.IN_ATTRIB {
 		e.Op |= Chmod
+	}
+	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE {
+		e.Op |= CloseWrite
 	}
 	return e
 }
