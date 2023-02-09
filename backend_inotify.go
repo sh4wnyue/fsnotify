@@ -357,15 +357,12 @@ func (w *Watcher) AddWith(name string, opts ...addOpt) error {
 	name = filepath.Clean(name)
 	_ = getOptions(opts...)
 
-	var flags uint32 = unix.IN_MOVED_TO | unix.IN_MOVED_FROM |
-		unix.IN_CREATE | unix.IN_ATTRIB | unix.IN_MODIFY |
-		unix.IN_MOVE_SELF | unix.IN_DELETE | unix.IN_DELETE_SELF
+	var flags uint32 = unix.IN_MOVED_TO | unix.IN_MOVED_FROM | unix.IN_CREATE | unix.IN_ATTRIB | unix.IN_MODIFY | unix.IN_MOVE_SELF | unix.IN_DELETE | unix.IN_DELETE_SELF | unix.IN_CLOSE_WRITE
 
 	return w.watches.updatePath(name, func(existing *watch) (*watch, error) {
 		if existing != nil {
 			flags |= existing.flags | unix.IN_MASK_ADD
 		}
-
 		wd, err := unix.InotifyAddWatch(w.fd, name, flags)
 		if wd == -1 {
 			return nil, err
@@ -400,6 +397,20 @@ func (w *Watcher) AddWith(name string, opts ...addOpt) error {
 // Removing a path that has not yet been added returns [ErrNonExistentWatch].
 //
 // Returns nil if [Watcher.Close] was called.
+
+/* IN_ACCESS – File was accessed
+IN_ATTRIB – Metadata changed (permissions, timestamps, extended attributes, etc.)
+IN_CLOSE_WRITE – File opened for writing was closed
+IN_CLOSE_NOWRITE – File not opened for writing was closed
+IN_CREATE – File/directory created in watched directory
+IN_DELETE – File/directory deleted from watched directory
+IN_DELETE_SELF – Watched file/directory was itself deleted
+IN_MODIFY – File was modified
+IN_MOVE_SELF – Watched file/directory was itself moved
+IN_MOVED_FROM – File moved out of watched directory
+IN_MOVED_TO – File moved into watched directory
+IN_OPEN – File was opened */
+
 func (w *Watcher) Remove(name string) error {
 	if w.isClosed() {
 		return nil
