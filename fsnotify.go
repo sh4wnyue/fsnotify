@@ -63,6 +63,7 @@ const (
 	MoveIn
 	MoveOut
 	CloseWrite
+	CloseNoWrite
 )
 
 // Common errors that can be reported.
@@ -97,6 +98,9 @@ func (o Op) String() string {
 	}
 	if o.Has(CloseWrite) {
 		b.WriteString("|CLOSEWRITE")
+	}
+	if o.Has(CloseNoWrite) {
+		b.WriteString("|CLOSENOWRITE")
 	}
 	if b.Len() == 0 {
 		return "[no events]"
