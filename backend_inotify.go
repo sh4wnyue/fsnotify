@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -235,7 +234,7 @@ func (w *watches) updatePath(path string, f func(*watch) (*watch, error)) error 
 func NewWatcher() (*Watcher, error) {
 	// Need to set nonblocking mode for SetDeadline to work, otherwise blocking
 	// I/O operations won't terminate on close.
-	fd, errno := syscall.InotifyInit1(syscall.IN_CLOEXEC | syscall.IN_NONBLOCK)
+	fd, errno := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if fd == -1 {
 		return nil, errno
 	}
@@ -358,23 +357,23 @@ func (w *Watcher) AddWith(name string, opts ...addOpt) error {
 	name = filepath.Clean(name)
 	_ = getOptions(opts...)
 
-	var flags uint32 = syscall.IN_MOVED_TO |
-		syscall.IN_MOVED_FROM |
-		syscall.IN_CREATE |
-		syscall.IN_ATTRIB |
-		syscall.IN_MODIFY |
-		syscall.IN_MOVE_SELF |
-		syscall.IN_DELETE |
-		syscall.IN_DELETE_SELF |
-		syscall.IN_CLOSE_WRITE |
-		syscall.IN_CLOSE_NOWRITE |
-		syscall.IN_CLOSE
+	var flags uint32 = unix.IN_MOVED_TO |
+		unix.IN_MOVED_FROM |
+		unix.IN_CREATE |
+		unix.IN_ATTRIB |
+		unix.IN_MODIFY |
+		unix.IN_MOVE_SELF |
+		unix.IN_DELETE |
+		unix.IN_DELETE_SELF |
+		unix.IN_CLOSE_WRITE |
+		unix.IN_CLOSE_NOWRITE |
+		unix.IN_CLOSE
 
 	return w.watches.updatePath(name, func(existing *watch) (*watch, error) {
 		if existing != nil {
-			flags |= existing.flags | syscall.IN_MASK_ADD
+			flags |= existing.flags | unix.IN_MASK_ADD
 		}
-		wd, err := syscall.InotifyAddWatch(w.fd, name, flags)
+		wd, err := unix.InotifyAddWatch(w.fd, name, flags)
 		if wd == -1 {
 			return nil, err
 		}
@@ -435,7 +434,7 @@ func (w *Watcher) remove(name string) error {
 		return fmt.Errorf("%w: %s", ErrNonExistentWatch, name)
 	}
 
-	success, errno := syscall.InotifyRmWatch(w.fd, wd)
+	success, errno := unix.InotifyRmWatch(w.fd, wd)
 	if success == -1 {
 		// TODO: Perhaps it's not helpful to return an error here in every case;
 		//       The only two possible errors are:
@@ -480,8 +479,8 @@ func (w *Watcher) readEvents() {
 	}()
 
 	var (
-		buf   [syscall.SizeofInotifyEvent * 4096]byte // Buffer for a maximum of 4096 raw events
-		errno error                                   // Syscall errno
+		buf   [unix.SizeofInotifyEvent * 4096]byte // Buffer for a maximum of 4096 raw events
+		errno error                                // Syscall errno
 	)
 	for {
 		// See if we have been closed.
@@ -500,7 +499,7 @@ func (w *Watcher) readEvents() {
 			continue
 		}
 
-		if n < syscall.SizeofInotifyEvent {
+		if n < unix.SizeofInotifyEvent {
 			var err error
 			if n == 0 {
 				err = io.EOF // If EOF is received. This should really never happen.
@@ -518,15 +517,15 @@ func (w *Watcher) readEvents() {
 		var offset uint32
 		// We don't know how many events we just read into the buffer
 		// While the offset points to at least one whole event...
-		for offset <= uint32(n-syscall.SizeofInotifyEvent) {
+		for offset <= uint32(n-unix.SizeofInotifyEvent) {
 			var (
 				// Point "raw" to the event in the buffer
-				raw     = (*syscall.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+				raw     = (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
 				mask    = uint32(raw.Mask)
 				nameLen = uint32(raw.Len)
 			)
 
-			if mask&syscall.IN_Q_OVERFLOW != 0 {
+			if mask&unix.IN_Q_OVERFLOW != 0 {
 				if !w.sendError(ErrEventOverflow) {
 					return
 				}
@@ -540,13 +539,13 @@ func (w *Watcher) readEvents() {
 
 			// inotify will automatically remove the watch on deletes; just need
 			// to clean our state here.
-			if watch != nil && mask&syscall.IN_DELETE_SELF == syscall.IN_DELETE_SELF {
+			if watch != nil && mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF {
 				w.watches.remove(watch.wd)
 			}
 			// We can't really update the state when a watched path is moved;
 			// only IN_MOVE_SELF is sent and not IN_MOVED_{FROM,TO}. So remove
 			// the watch.
-			if watch != nil && mask&syscall.IN_MOVE_SELF == syscall.IN_MOVE_SELF {
+			if watch != nil && mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
 				err := w.remove(watch.path)
 				if err != nil && !errors.Is(err, ErrNonExistentWatch) {
 					if !w.sendError(err) {
@@ -561,7 +560,7 @@ func (w *Watcher) readEvents() {
 			}
 			if nameLen > 0 {
 				// Point "bytes" at the first byte of the filename
-				bytes := (*[syscall.PathMax]byte)(unsafe.Pointer(&buf[offset+syscall.SizeofInotifyEvent]))[:nameLen:nameLen]
+				bytes := (*[unix.PathMax]byte)(unsafe.Pointer(&buf[offset+unix.SizeofInotifyEvent]))[:nameLen:nameLen]
 				// The filename is padded with NULL bytes. TrimRight() gets rid of those.
 				name += "/" + strings.TrimRight(string(bytes[0:nameLen]), "\000")
 			}
@@ -569,14 +568,14 @@ func (w *Watcher) readEvents() {
 			event := w.newEvent(name, mask)
 
 			// Send the events that are not ignored on the events channel
-			if mask&syscall.IN_IGNORED == 0 {
+			if mask&unix.IN_IGNORED == 0 {
 				if !w.sendEvent(event) {
 					return
 				}
 			}
 
 			// Move to the next event in the buffer
-			offset += syscall.SizeofInotifyEvent + nameLen
+			offset += unix.SizeofInotifyEvent + nameLen
 		}
 	}
 }
@@ -584,31 +583,31 @@ func (w *Watcher) readEvents() {
 // newEvent returns an platform-independent Event based on an inotify mask.
 func (w *Watcher) newEvent(name string, mask uint32) Event {
 	e := Event{Name: name}
-	if mask&syscall.IN_CREATE == syscall.IN_CREATE {
+	if mask&unix.IN_CREATE == unix.IN_CREATE {
 		e.Op |= Create
 	}
-	if mask&syscall.IN_MOVED_TO == syscall.IN_MOVED_TO {
+	if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
 		e.Op |= MoveIn
 	}
-	if mask&syscall.IN_DELETE_SELF == syscall.IN_DELETE_SELF || mask&syscall.IN_DELETE == syscall.IN_DELETE {
+	if mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF || mask&unix.IN_DELETE == unix.IN_DELETE {
 		e.Op |= Remove
 	}
-	if mask&syscall.IN_MODIFY == syscall.IN_MODIFY {
+	if mask&unix.IN_MODIFY == unix.IN_MODIFY {
 		e.Op |= Write
 	}
-	if mask&syscall.IN_MOVE_SELF == syscall.IN_MOVE_SELF {
+	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
 		e.Op |= Rename
 	}
-	if mask&syscall.IN_MOVED_FROM == syscall.IN_MOVED_FROM {
+	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
 		e.Op |= MoveOut
 	}
-	if mask&syscall.IN_ATTRIB == syscall.IN_ATTRIB {
+	if mask&unix.IN_ATTRIB == unix.IN_ATTRIB {
 		e.Op |= Chmod
 	}
-	if mask&syscall.IN_CLOSE_WRITE == syscall.IN_CLOSE_WRITE || mask&syscall.IN_CLOSE == syscall.IN_CLOSE {
+	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE || mask&unix.IN_CLOSE == unix.IN_CLOSE {
 		e.Op |= CloseWrite
 	}
-	if mask&syscall.IN_CLOSE_NOWRITE == syscall.IN_CLOSE_NOWRITE {
+	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
 		e.Op |= CloseNoWrite
 	}
 	return e
