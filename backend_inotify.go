@@ -359,7 +359,7 @@ func (w *Watcher) AddWith(name string, opts ...addOpt) error {
 	_ = getOptions(opts...)
 
 	var flags uint32 = syscall.IN_MOVED_TO |
-	syscall.IN_MOVED_FROM |
+		syscall.IN_MOVED_FROM |
 		syscall.IN_CREATE |
 		syscall.IN_ATTRIB |
 		syscall.IN_MODIFY |
@@ -481,7 +481,7 @@ func (w *Watcher) readEvents() {
 
 	var (
 		buf   [syscall.SizeofInotifyEvent * 4096]byte // Buffer for a maximum of 4096 raw events
-		errno error                                // Syscall errno
+		errno error                                   // Syscall errno
 	)
 	for {
 		// See if we have been closed.
@@ -605,10 +605,10 @@ func (w *Watcher) newEvent(name string, mask uint32) Event {
 	if mask&syscall.IN_ATTRIB == syscall.IN_ATTRIB {
 		e.Op |= Chmod
 	}
-	if mask&syscall.IN_CLOSE_WRITE == syscall.IN_CLOSE_WRITE || mask&syscall.IN_CLOSE == syscall.IN_CLOSE ||  {
+	if mask&syscall.IN_CLOSE_WRITE == syscall.IN_CLOSE_WRITE || mask&syscall.IN_CLOSE == syscall.IN_CLOSE {
 		e.Op |= CloseWrite
 	}
-	if mask&syscall.IN_CLOSE_NOWRITE == syscall.IN_CLOSE_NOWRITE  {
+	if mask&syscall.IN_CLOSE_NOWRITE == syscall.IN_CLOSE_NOWRITE {
 		e.Op |= CloseNoWrite
 	}
 	return e
