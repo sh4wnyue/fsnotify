@@ -14,7 +14,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/fsnotify/fsnotify/internal"
+	"github.com/sh4wnyue/fsnotify/internal"
 	"golang.org/x/sys/unix"
 )
 
@@ -324,10 +324,10 @@ func (w *inotify) add(path string, with withOpts, recurse bool) error {
 	if with.op.Has(xUnportableRead) {
 		flags |= unix.IN_ACCESS
 	}
-	if with.op.Has(xUnportableCloseWrite) {
+	if with.op.Has(CloseWrite) {
 		flags |= unix.IN_CLOSE_WRITE
 	}
-	if with.op.Has(xUnportableCloseRead) {
+	if with.op.Has(CloseNoWrite) {
 		flags |= unix.IN_CLOSE_NOWRITE
 	}
 	return w.register(path, flags, recurse)

@@ -202,6 +202,10 @@ const (
 
 	MoveOut
 
+	CloseWrite
+
+	CloseNoWrite
+
 	// File descriptor was opened.
 	//
 	// Only works on Linux and FreeBSD.
@@ -368,15 +372,15 @@ func (o Op) String() string {
 		b.WriteString("|READ")
 	}
 	if o.Has(MoveIn) {
-		b.WriteString("|MOVEIN")
+		b.WriteString("|MOVE_IN")
 	}
 	if o.Has(MoveOut) {
-		b.WriteString("|MOVEOUT")
+		b.WriteString("|MOVE_OUT")
 	}
-	if o.Has(xUnportableCloseWrite) {
+	if o.Has(CloseWrite) {
 		b.WriteString("|CLOSE_WRITE")
 	}
-	if o.Has(xUnportableCloseRead) {
+	if o.Has(CloseNoWrite) {
 		b.WriteString("|CLOSE_READ")
 	}
 	if o.Has(Rename) {
@@ -432,7 +436,7 @@ var debug = func() bool {
 
 var defaultOpts = withOpts{
 	bufsize: 65536, // 64K
-	op:      Create | Write | Remove | Rename | Chmod | MoveIn | MoveOut,
+	op:      Create | Write | Remove | Rename | Chmod | MoveIn | MoveOut | CloseWrite | CloseNoWrite,
 }
 
 func getOptions(opts ...addOpt) withOpts {
