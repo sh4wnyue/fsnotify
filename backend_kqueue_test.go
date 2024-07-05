@@ -1,5 +1,4 @@
 //go:build freebsd || openbsd || netbsd || dragonfly || darwin
-// +build freebsd openbsd netbsd dragonfly darwin
 
 package fsnotify
 
@@ -19,38 +18,45 @@ func TestRemoveState(t *testing.T) {
 	touch(t, file)
 
 	w := newWatcher(t, tmp)
+	kq := w.b.(*kqueue)
 	addWatch(t, w, tmp)
 	addWatch(t, w, file)
 
 	check := func(wantUser, wantTotal int) {
 		t.Helper()
 
-		if len(w.watches) != wantTotal {
+		if len(kq.watches.path) != wantTotal {
 			var d []string
-			for k, v := range w.watches {
+			for k, v := range kq.watches.path {
 				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
 			}
-			t.Errorf("unexpected number of entries in w.watches (have %d, want %d):\n%v",
-				len(w.watches), wantTotal, strings.Join(d, "\n"))
+			t.Errorf("unexpected number of entries in w.watches.path (have %d, want %d):\n%v",
+				len(kq.watches.path), wantTotal, strings.Join(d, "\n"))
 		}
-		if len(w.paths) != wantTotal {
+		if len(kq.watches.wd) != wantTotal {
 			var d []string
-			for k, v := range w.paths {
+			for k, v := range kq.watches.wd {
 				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
 			}
-			t.Errorf("unexpected number of entries in w.paths (have %d, want %d):\n%v",
-				len(w.paths), wantTotal, strings.Join(d, "\n"))
+			t.Errorf("unexpected number of entries in w.watches.wd (have %d, want %d):\n%v",
+				len(kq.watches.wd), wantTotal, strings.Join(d, "\n"))
 		}
-		if len(w.userWatches) != wantUser {
+		if len(kq.watches.byUser) != wantUser {
 			var d []string
-			for k, v := range w.userWatches {
+			for k, v := range kq.watches.byUser {
 				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
 			}
-			t.Errorf("unexpected number of entries in w.userWatches (have %d, want %d):\n%v",
-				len(w.userWatches), wantUser, strings.Join(d, "\n"))
+			t.Errorf("unexpected number of entries in w.watches.byUser (have %d, want %d):\n%v",
+				len(kq.watches.byUser), wantUser, strings.Join(d, "\n"))
 		}
 	}
 
+	check(2, 3)
+
+	// Shouldn't change internal state.
+	if err := w.Add("/path-doesnt-exist"); err == nil {
+		t.Fatal(err)
+	}
 	check(2, 3)
 
 	if err := w.Remove(file); err != nil {
@@ -67,30 +73,23 @@ func TestRemoveState(t *testing.T) {
 	// of files watches. Just make sure they're 0 after everything is removed.
 	{
 		want := 0
-		if len(w.watchesByDir) != want {
+		if len(kq.watches.byDir) != want {
 			var d []string
-			for k, v := range w.watchesByDir {
+			for k, v := range kq.watches.byDir {
 				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
 			}
-			t.Errorf("unexpected number of entries in w.watchesByDir (have %d, want %d):\n%v",
-				len(w.watchesByDir), want, strings.Join(d, "\n"))
-		}
-		if len(w.dirFlags) != want {
-			var d []string
-			for k, v := range w.dirFlags {
-				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
-			}
-			t.Errorf("unexpected number of entries in w.dirFlags (have %d, want %d):\n%v",
-				len(w.dirFlags), want, strings.Join(d, "\n"))
+			t.Errorf("unexpected number of entries in w.watches.byDir (have %d, want %d):\n%v",
+				len(kq.watches.byDir), want, strings.Join(d, "\n"))
 		}
 
-		if len(w.fileExists) != want {
+		if len(kq.watches.seen) != want {
 			var d []string
-			for k, v := range w.fileExists {
+			for k, v := range kq.watches.seen {
 				d = append(d, fmt.Sprintf("%#v = %#v", k, v))
 			}
-			t.Errorf("unexpected number of entries in w.fileExists (have %d, want %d):\n%v",
-				len(w.fileExists), want, strings.Join(d, "\n"))
+			t.Errorf("unexpected number of entries in w.watches.seen (have %d, want %d):\n%v",
+				len(kq.watches.seen), want, strings.Join(d, "\n"))
+			return
 		}
 	}
 }
