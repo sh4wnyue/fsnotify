@@ -582,11 +582,11 @@ func (w *inotify) isRecursive(path string) bool {
 
 func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 	e := Event{Name: name}
-	if mask&unix.IN_CREATE == unix.IN_CREATE
+	if mask&unix.IN_CREATE == unix.IN_CREATE {
 		e.Op |= Create
-	} 
-	if  mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
-			e.Op |= MoveIn
+	}
+	if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+		e.Op |= MoveIn
 	}
 	if mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF || mask&unix.IN_DELETE == unix.IN_DELETE {
 		e.Op |= Remove
@@ -610,7 +610,7 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 		e.Op |= UnportableCloseRead
 	}
 
-	if  mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
 		e.Op |= MoveOut
 	}
 	if mask&unix.IN_ATTRIB == unix.IN_ATTRIB {
