@@ -536,11 +536,7 @@ func (w *kqueue) readEvents() {
 					if found {
 						// TODO: this branch is never triggered in any test.
 						// Added in d6220df (2012).
-<<<<<<< HEAD
-						// isDir check added in 8611c35 (2016): https://github.com/fsnotify/fsnotify/pull/111
-=======
 						// isDir check added in 8611c35 (2016): https://github.com/sh4wnyue/fsnotify/pull/111
->>>>>>> modify 1.7.0  file,add MOVED_TO,MOVED_From ,CLOSE_WRITE
 						//
 						// I don't really get how this can be triggered either.
 						// And it wasn't triggered in the patch that added it,

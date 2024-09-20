@@ -13,13 +13,8 @@ import (
 	"testing"
 	"time"
 
-<<<<<<< HEAD
-	"github.com/fsnotify/fsnotify/internal"
-	"github.com/fsnotify/fsnotify/internal/ztest"
-=======
 	"github.com/sh4wnyue/fsnotify/internal"
 	"github.com/sh4wnyue/fsnotify/internal/ztest"
->>>>>>> modify 1.7.0  file,add MOVED_TO,MOVED_From ,CLOSE_WRITE
 )
 
 // We wait a little bit after most commands; gives the system some time to sync
