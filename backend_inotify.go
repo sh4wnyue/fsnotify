@@ -306,8 +306,14 @@ func (w *inotify) add(path string, with withOpts, recurse bool) error {
 	if with.op.Has(Remove) {
 		flags |= unix.IN_DELETE | unix.IN_DELETE_SELF
 	}
+	if with.op.Has(MoveIn) {
+		flags |= unix.IN_MOVED_TO
+	}
+	if with.op.Has(MoveOut) {
+		flags |= unix.IN_MOVED_FROM
+	}
 	if with.op.Has(Rename) {
-		flags |= unix.IN_MOVED_TO | unix.IN_MOVED_FROM | unix.IN_MOVE_SELF
+		flags |= unix.IN_MOVE_SELF
 	}
 	if with.op.Has(Chmod) {
 		flags |= unix.IN_ATTRIB
@@ -603,42 +609,19 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 	if mask&unix.IN_ACCESS == unix.IN_ACCESS {
 		e.Op |= UnportableRead
 	}
-	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE {
-		e.Op |= UnportableCloseWrite
-	}
-	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
-		e.Op |= UnportableCloseRead
-	}
-
 	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
 		e.Op |= MoveOut
 	}
 	if mask&unix.IN_ATTRIB == unix.IN_ATTRIB {
 		e.Op |= Chmod
 	}
-
-	if cookie != 0 {
-		if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
-			w.cookiesMu.Lock()
-			w.cookies[w.cookieIndex] = koekje{cookie: cookie, path: e.Name}
-			w.cookieIndex++
-			if w.cookieIndex > 9 {
-				w.cookieIndex = 0
-			}
-			w.cookiesMu.Unlock()
-		} else if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
-			w.cookiesMu.Lock()
-			var prev string
-			for _, c := range w.cookies {
-				if c.cookie == cookie {
-					prev = c.path
-					break
-				}
-			}
-			w.cookiesMu.Unlock()
-			e.renamedFrom = prev
-		}
+	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE || mask&unix.IN_CLOSE == unix.IN_CLOSE {
+		e.Op |= UnportableCloseWrite
 	}
+	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
+		e.Op |= UnportableCloseRead
+	}
+
 	return e
 }
 

@@ -200,7 +200,6 @@ const (
 	MoveIn
 	MoveOut
 
-
 	// File descriptor was opened.
 	//
 	// Only works on Linux and FreeBSD.
@@ -379,10 +378,10 @@ func (o Op) String() string {
 		b.WriteString("|READ")
 	}
 	if o.Has(UnportableCloseWrite) {
-		b.WriteString("|CLOSE_WRITE")
+		b.WriteString("|CLOSEWRITE")
 	}
 	if o.Has(UnportableCloseRead) {
-		b.WriteString("|CLOSE_READ")
+		b.WriteString("|CLOSEREAD")
 	}
 	if b.Len() == 0 {
 		return "[no events]"
@@ -431,7 +430,7 @@ var debug = func() bool {
 
 var defaultOpts = withOpts{
 	bufsize: 65536, // 64K
-	op:      Create | Write | Remove | Rename | Chmod | MoveIn| MoveOut |UnportableOpen | UnportableRead | UnportableCloseWrite| UnportableCloseRead,
+	op:      Create | Write | Remove | Rename | Chmod | MoveIn | MoveOut | UnportableOpen | UnportableRead | UnportableCloseWrite | UnportableCloseRead,
 }
 
 func getOptions(opts ...addOpt) withOpts {
