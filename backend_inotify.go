@@ -202,22 +202,28 @@ func (w *inotify) AddWith(path string, opts ...addOpt) error {
 		if with.op.Has(Remove) {
 			flags |= unix.IN_DELETE | unix.IN_DELETE_SELF
 		}
+		if with.op.Has(MoveIn) {
+			flags |= unix.IN_MOVED_TO
+		}
+		if with.op.Has(MoveOut) {
+			flags |= unix.IN_MOVED_FROM
+		}
 		if with.op.Has(Rename) {
-			flags |= unix.IN_MOVED_TO | unix.IN_MOVED_FROM | unix.IN_MOVE_SELF
+			flags |= unix.IN_MOVE_SELF
 		}
 		if with.op.Has(Chmod) {
 			flags |= unix.IN_ATTRIB
 		}
-		if with.op.Has(xUnportableOpen) {
+		if with.op.Has(UnportableOpen) {
 			flags |= unix.IN_OPEN
 		}
-		if with.op.Has(xUnportableRead) {
+		if with.op.Has(UnportableRead) {
 			flags |= unix.IN_ACCESS
 		}
-		if with.op.Has(xUnportableCloseWrite) {
+		if with.op.Has(UnportableCloseWrite) {
 			flags |= unix.IN_CLOSE_WRITE
 		}
-		if with.op.Has(xUnportableCloseRead) {
+		if with.op.Has(UnportableCloseRead) {
 			flags |= unix.IN_CLOSE_NOWRITE
 		}
 		return w.register(path, flags, wf)
@@ -519,8 +525,14 @@ func (w *inotify) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byte, offs
 
 func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 	e := Event{Name: name}
-	if mask&unix.IN_CREATE == unix.IN_CREATE || mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+	if mask&unix.IN_CREATE == unix.IN_CREATE {
 		e.Op |= Create
+	}
+	if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+		e.Op |= MoveIn
+	}
+	if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+		e.Op |= MoveOut
 	}
 	if mask&unix.IN_DELETE_SELF == unix.IN_DELETE_SELF || mask&unix.IN_DELETE == unix.IN_DELETE {
 		e.Op |= Remove
@@ -528,23 +540,24 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 	if mask&unix.IN_MODIFY == unix.IN_MODIFY {
 		e.Op |= Write
 	}
+	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF {
+		e.Op |= Rename
+	}
 	if mask&unix.IN_OPEN == unix.IN_OPEN {
-		e.Op |= xUnportableOpen
+		e.Op |= UnportableOpen
 	}
 	if mask&unix.IN_ACCESS == unix.IN_ACCESS {
-		e.Op |= xUnportableRead
-	}
-	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE {
-		e.Op |= xUnportableCloseWrite
-	}
-	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
-		e.Op |= xUnportableCloseRead
-	}
-	if mask&unix.IN_MOVE_SELF == unix.IN_MOVE_SELF || mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
-		e.Op |= Rename
+		e.Op |= UnportableRead
 	}
 	if mask&unix.IN_ATTRIB == unix.IN_ATTRIB {
 		e.Op |= Chmod
+	}
+
+	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE || mask&unix.IN_CLOSE == unix.IN_CLOSE {
+		e.Op |= UnportableCloseWrite
+	}
+	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
+		e.Op |= UnportableCloseRead
 	}
 
 	if cookie != 0 {

@@ -196,16 +196,18 @@ const (
 	// get triggered very frequently by some software. For example, Spotlight
 	// indexing on macOS, anti-virus software, backup software, etc.
 	Chmod
+	MoveIn
+	MoveOut
 
 	// File descriptor was opened.
 	//
 	// Only works on Linux and FreeBSD.
-	xUnportableOpen
+	UnportableOpen
 
 	// File was read from.
 	//
 	// Only works on Linux and FreeBSD.
-	xUnportableRead
+	UnportableRead
 
 	// File opened for writing was closed.
 	//
@@ -215,12 +217,12 @@ const (
 	// waiting for Write events to stop. It's also faster (if you're not
 	// listening to Write events): copying a file of a few GB can easily
 	// generate tens of thousands of Write events in a short span of time.
-	xUnportableCloseWrite
+	UnportableCloseWrite
 
 	// File opened for reading was closed.
 	//
 	// Only works on Linux.
-	xUnportableCloseRead
+	UnportableCloseRead
 )
 
 var (
@@ -358,24 +360,32 @@ func (o Op) String() string {
 	if o.Has(Write) {
 		b.WriteString("|WRITE")
 	}
-	if o.Has(xUnportableOpen) {
-		b.WriteString("|OPEN")
-	}
-	if o.Has(xUnportableRead) {
-		b.WriteString("|READ")
-	}
-	if o.Has(xUnportableCloseWrite) {
-		b.WriteString("|CLOSE_WRITE")
-	}
-	if o.Has(xUnportableCloseRead) {
-		b.WriteString("|CLOSE_READ")
-	}
 	if o.Has(Rename) {
 		b.WriteString("|RENAME")
 	}
 	if o.Has(Chmod) {
 		b.WriteString("|CHMOD")
 	}
+	if o.Has(MoveIn) {
+		b.WriteString("|MOVE_IN")
+	}
+	if o.Has(MoveOut) {
+		b.WriteString("|MOVE_OUT")
+	}
+	if o.Has(UnportableOpen) {
+		b.WriteString("|OPEN")
+	}
+	if o.Has(UnportableRead) {
+		b.WriteString("|READ")
+	}
+	if o.Has(UnportableCloseWrite) {
+		b.WriteString("|CLOSE_WRITE")
+	}
+	if o.Has(UnportableCloseRead) {
+		b.WriteString("|CLOSE_READ")
+	}
+ 
+
 	if b.Len() == 0 {
 		return "[no events]"
 	}
@@ -422,7 +432,7 @@ var debug = func() bool {
 
 var defaultOpts = withOpts{
 	bufsize: 65536, // 64K
-	op:      Create | Write | Remove | Rename | Chmod,
+	op:      Create | Write | Remove | Rename | Chmod | MoveIn | MoveOut | UnportableOpen | UnportableRead | UnportableCloseWrite | UnportableCloseRead,
 }
 
 func getOptions(opts ...addOpt) withOpts {
